@@ -172,6 +172,13 @@
   .no-row{padding:8px 0;border-bottom:1px dashed #fde68a;font-size:15px;font-weight:600}
   .no-row:last-child{border-bottom:none}
   .allok{color:#166534;font-weight:700;text-align:center;padding:8px 0}
+  /* История заказов (архив) */
+  .history{background:linear-gradient(180deg,#f5f3ff,#ede9fe);border:2px solid #ddd6fe}
+  .history h2{color:#6d28d9}
+  .hist-row{display:flex;justify-content:space-between;align-items:center;padding:11px 10px;margin:6px 0;border:2px solid #ddd6fe;border-radius:12px;background:#fff;cursor:pointer;font-size:15px;font-weight:600;transition:background .12s}
+  .hist-row:active{background:#ede9fe}
+  .hist-v{color:#6d28d9;font-weight:800;font-size:13px}
+  .btn-archive{background:linear-gradient(135deg,#8b5cf6,#6d28d9);box-shadow:0 6px 16px rgba(109,40,217,.28)}
 </style>
 </head>
 <body>
@@ -239,6 +246,10 @@
       <label style="display:flex;justify-content:space-between;align-items:center;margin-top:14px;font-weight:600;font-size:15px"><span>🥐 Приём выпечки до</span><input type="time" id="bakeCloseInput" style="width:auto;padding:8px 10px;border:2px solid var(--line);border-radius:10px;font-size:15px"></label>
       <div class="hint" style="margin-top:4px">Выпечку можно заказывать до этого времени (обычно раньше основного меню).</div>
       <button class="btn2" id="saveBakeClose" style="margin-top:8px">Сохранить время выпечки</button>
+      <label style="display:flex;justify-content:space-between;align-items:center;margin-top:16px;font-weight:600;font-size:15px"><span>🧹 Автоочистка заказов в</span><input type="time" id="autoCleanInput" style="width:auto;padding:8px 10px;border:2px solid var(--line);border-radius:10px;font-size:15px"></label>
+      <div class="hint" style="margin-top:4px">Каждый день в это время заказы прошлого дня переносятся в архив, а список очищается.</div>
+      <button class="btn2" id="saveAutoClean" style="margin-top:8px">Сохранить время автоочистки</button>
+      <button class="btn2 btn-archive" id="archiveNow" style="margin-top:8px">🗄️ Архивировать и очистить сейчас</button>
     </div>
     <div class="card">
       <label>Меню на сегодня</label>
@@ -274,6 +285,11 @@
     <div class="card stats">
       <h2>📊 Статистика за день</h2>
       <div id="statsBox"><div class="empty">Пока заказов нет</div></div>
+    </div>
+    <div class="card history">
+      <h2>🗄️ История заказов (архив)</h2>
+      <div class="hint" style="margin:0 0 10px">Нажмите на день, чтобы посмотреть заказы.</div>
+      <div id="historyBox"><div class="empty">Архив пуст</div></div>
     </div>
     <div class="card orders">
       <h2>Все заказы</h2>
@@ -329,6 +345,9 @@ function getDishes(kind){ return api('GET','/api/dishes/'+kind).then(function(v)
 function addDishServer(kind,title,price){ return api('POST','/api/dishes/'+kind,{title:title,price:price}); }
 function deleteDishServer(kind,title){ return api('DELETE','/api/dishes/'+kind+'/'+encodeURIComponent(title)); }
 function editDishPriceServer(kind,title,price){ return api('PUT','/api/dishes/'+kind+'/'+encodeURIComponent(title),{price:price}); }
+function getArchiveDays(){ return api('GET','/api/archive/days').then(function(v){return Array.isArray(v)?v:[];}); }
+function getArchiveDay(date){ return api('GET','/api/archive/'+date).then(function(v){return Array.isArray(v)?v:[];}); }
+function archiveNow(){ return api('POST','/api/archive-now'); }
 // Настройки
 function getSetting(key){ return api('GET','/api/settings/'+key).then(function(v){return v?v.value:null;}); }
 function putSetting(key,value){ return api('PUT','/api/settings/'+key,{value:value}); }
@@ -344,6 +363,7 @@ function itemLabel(title){ var p=dishPrice(title,'main'); if(p==null)p=dishPrice
 function todayStr(){var d=new Date();return d.getFullYear()+'-'+(d.getMonth()+1)+'-'+d.getDate();}
 var FORCE_OPEN=false;
 var BAKE_CLOSE=630;   // минуты от полуночи, время закрытия выпечки (по умолч. 10:30), задаётся в админке
+var AUTO_CLEAN_HOUR=4;   // час автоочистки заказов (по умолч. 04:00)
 function bakeClosed(){ if(FORCE_OPEN) return false; var d=new Date(); return d.getHours()*60+d.getMinutes()>=BAKE_CLOSE; }
 function bakeCloseLabel(){ var h=Math.floor(BAKE_CLOSE/60), m=BAKE_CLOSE%60; return (h<10?'0':'')+h+':'+(m<10?'0':'')+m; }
 function minToTime(min){ var h=Math.floor(min/60), m=min%60; return (h<10?'0':'')+h+':'+(m<10?'0':'')+m; }
@@ -473,6 +493,28 @@ function renderCook(orders){
   if(notes.length){ html+='<div class="cook-sub">📝 ПОЖЕЛАНИЯ</div>'; notes.forEach(function(o){ html+='<div class="cook-row"><span>'+o.name+'</span><span class="q" style="font-weight:600">'+o.note.trim()+'</span></div>'; }); }
   box.innerHTML=html;
 }
+function renderHistory(){
+  var box=$('historyBox');
+  getArchiveDays().then(function(days){
+    if(!days.length){ box.innerHTML='<div class="empty">Архив пуст</div>'; return; }
+    box.innerHTML=days.map(function(d){
+      return '<div class="hist-row" data-date="'+d.order_date+'"><span>📅 '+d.order_date+'</span>'+
+             '<span class="hist-v">'+d.orders+' зак. · '+(d.sum||0).toLocaleString('ru-RU')+' ₸</span></div>';
+    }).join('');
+    box.querySelectorAll('.hist-row').forEach(function(row){
+      row.onclick=function(){
+        var date=row.dataset.date;
+        getArchiveDay(date).then(function(orders){
+          var txt=date+':\n\n'+orders.map(function(o){
+            var its=(o.items||[]).map(function(it){return it.title+' ×'+it.qty;}).join(', ');
+            return o.name+' — '+its+' ('+(o.sum||0)+' ₸)'+(o.note?(' [«'+o.note+'»]'):'');
+          }).join('\n');
+          alert(txt||'Нет данных');
+        });
+      };
+    });
+  });
+}
 function renderNotOrdered(orders){
   var box=$('notOrderedBox');
   var known=loadNames();
@@ -574,11 +616,12 @@ function renderMenuEditor(mn){ chkRows($('editMains'),(DISH_CACHE.main||[]).map(
 function isAdmin(){return localStorage.getItem('admin')==='1';}
 var lastMenuSig=null;
 function refresh(){
-  return Promise.all([getMenuRaw(),getOrders(),getSetting('forceOpen'),getDishes('main'),getDishes('bake'),getSetting('bakeClose')]).then(function(res){
+  return Promise.all([getMenuRaw(),getOrders(),getSetting('forceOpen'),getDishes('main'),getDishes('bake'),getSetting('bakeClose'),getSetting('autoCleanHour')]).then(function(res){
     var menu=normalizeMenu(res[0]);var orders=res[1];
     FORCE_OPEN=(res[2]===true);
     DISH_CACHE.main=res[3]||[]; DISH_CACHE.bake=res[4]||[];
     if(res[5]!=null && !isNaN(+res[5])) BAKE_CLOSE=+res[5];
+    if(res[6]!=null && !isNaN(+res[6])) AUTO_CLEAN_HOUR=+res[6];
     var on=isAdmin(), closed=ordersClosed();
     var off=$('offline');
     if(SERVER_OK===false){ off.textContent='⚠ Ошибка сервера: '+SERVER_ERR; off.style.display='block'; }
@@ -602,6 +645,8 @@ function refresh(){
       renderOrders(orders);
       renderStats(orders);
       renderNotOrdered(orders);
+      renderHistory();
+      $('autoCleanInput').value=minToTime(AUTO_CLEAN_HOUR*60);
     } else { renderMyOrders(orders); }
   }).catch(function(e){ console.warn('refresh: сеть недоступна (предпросмотр без интернета?)', e); });
 }
@@ -615,6 +660,8 @@ $('adminBtn').onclick=function(){
 $('logout').onclick=function(){localStorage.removeItem('admin');lastMenuSig=null;refresh();window.scrollTo({top:0,behavior:'smooth'});};
 $('forceOpen').onchange=function(){ putSetting('forceOpen',$('forceOpen').checked).then(function(){ FORCE_OPEN=$('forceOpen').checked; lastMenuSig=null; refresh(); }); };
 $('saveBakeClose').onclick=function(){ var v=$('bakeCloseInput').value; if(!v){alert('Укажите время');return;} var min=timeToMin(v); putSetting('bakeClose',min).then(function(){ BAKE_CLOSE=min; lastMenuSig=null; return refresh(); }).then(function(){ alert('Время приёма выпечки: до '+minToTime(min)); }); };
+$('saveAutoClean').onclick=function(){ var v=$('autoCleanInput').value; if(!v){alert('Укажите время');return;} var h=timeToMin(v)/60|0; putSetting('autoCleanHour',h).then(function(){ AUTO_CLEAN_HOUR=h; alert('Автоочистка будет в '+minToTime(h*60)+' каждый день.'); }); };
+$('archiveNow').onclick=function(){ if(!confirm('Перенести текущие заказы в архив и очистить список?'))return; archiveNow().then(function(r){ if(r&&r.ok){ alert('Заархивировано заказов: '+r.archived+'. Список очищен.'); lastMenuSig=null; refresh(); } else { alert('Не удалось выполнить.'); } }); };
 function addDish(kind,nameId,priceId){
   var name=($(nameId).value||'').trim();
   if(!name){ alert('Введите название блюда'); $(nameId).focus(); return; }

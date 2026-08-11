@@ -172,6 +172,100 @@ app.put('/api/settings/:key', async (req, res) => {
   } catch (e) { console.error(e); res.status(500).json({ error: String(e) }); }
 });
 
+// ======================================================
+//  АРХИВ и АВТООЧИСТКА заказов
+// ======================================================
+// Перенести все текущие заказы в архив и очистить orders.
+async function archiveAndClean(orderDate) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows: ords } = await client.query(
+      `SELECT id, customer, client_id, total, paid, note, created_at FROM orders`);
+    for (const o of ords) {
+      const { rows: a } = await client.query(
+        `INSERT INTO orders_archive(orig_id, customer, client_id, total, paid, note, order_date, created_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
+        [o.id, o.customer, o.client_id, o.total, o.paid, o.note, orderDate, o.created_at]);
+      const aid = a[0].id;
+      const { rows: items } = await client.query(
+        `SELECT title, kind, qty, price FROM order_items WHERE order_id=$1`, [o.id]);
+      for (const it of items) {
+        await client.query(
+          `INSERT INTO order_items_archive(archive_id, title, kind, qty, price) VALUES ($1,$2,$3,$4,$5)`,
+          [aid, it.title, it.kind, it.qty, it.price]);
+      }
+    }
+    await client.query(`DELETE FROM orders`);
+    await client.query('COMMIT');
+    return ords.length;
+  } catch (e) { await client.query('ROLLBACK'); throw e; }
+  finally { client.release(); }
+}
+
+function todayISO() {
+  const d = new Date();
+  return d.getFullYear() + '-' + ('0'+(d.getMonth()+1)).slice(-2) + '-' + ('0'+d.getDate()).slice(-2);
+}
+
+// Проверка: не пора ли автоочистить (наступил новый день и прошёл час autoCleanHour)
+async function maybeAutoClean() {
+  try {
+    const { rows } = await pool.query(
+      `SELECT key, value FROM settings WHERE key IN ('autoCleanHour','lastClean')`);
+    const map = {}; rows.forEach(r => map[r.key] = r.value);
+    const hour = parseInt(map.autoCleanHour, 10);
+    const lastClean = map.lastClean || '';
+    const today = todayISO();
+    const now = new Date();
+    // чистим, если сегодня ещё не чистили И текущее время >= час автоочистки
+    if (lastClean !== today && now.getHours() >= (isNaN(hour) ? 4 : hour)) {
+      // архивируем заказы под ВЧЕРАШНЕЙ датой (это заказы прошлого дня)
+      const y = new Date(now.getTime() - 24*3600*1000);
+      const yISO = y.getFullYear() + '-' + ('0'+(y.getMonth()+1)).slice(-2) + '-' + ('0'+y.getDate()).slice(-2);
+      const n = await archiveAndClean(yISO);
+      await pool.query(
+        `INSERT INTO settings(key,value) VALUES ('lastClean',$1)
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, [today]);
+      if (n > 0) console.log('✓ Автоочистка: заархивировано и очищено заказов: ' + n);
+    }
+  } catch (e) { console.error('⚠ Автоочистка:', e); }
+}
+
+// Список дней в архиве
+app.get('/api/archive/days', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT order_date, COUNT(*)::int AS orders, COALESCE(SUM(total),0)::int AS sum
+       FROM orders_archive GROUP BY order_date ORDER BY order_date DESC LIMIT 60`);
+    res.json(rows);
+  } catch (e) { console.error(e); res.status(500).json({ error: String(e) }); }
+});
+
+// Заказы за конкретный день из архива
+app.get('/api/archive/:date', async (req, res) => {
+  try {
+    const { rows: ords } = await pool.query(
+      `SELECT id, customer, client_id, total, paid, note FROM orders_archive WHERE order_date=$1 ORDER BY id`,
+      [req.params.date]);
+    const { rows: items } = await pool.query(
+      `SELECT oia.archive_id, oia.title, oia.kind, oia.qty, oia.price
+       FROM order_items_archive oia JOIN orders_archive oa ON oa.id=oia.archive_id
+       WHERE oa.order_date=$1`, [req.params.date]);
+    const byId = {};
+    items.forEach(it => { (byId[it.archive_id] = byId[it.archive_id] || []).push(
+      { title: it.title, cat: it.kind, qty: it.qty, price: it.price }); });
+    res.json(ords.map(o => ({ name: o.customer, cid: o.client_id, sum: o.total, paid: o.paid,
+      note: o.note || '', items: byId[o.id] || [] })));
+  } catch (e) { console.error(e); res.status(500).json({ error: String(e) }); }
+});
+
+// Ручной запуск архивации+очистки (кнопка в админке «Архивировать и очистить»)
+app.post('/api/archive-now', async (req, res) => {
+  try { const n = await archiveAndClean(todayISO()); res.json({ ok: true, archived: n }); }
+  catch (e) { console.error(e); res.status(500).json({ error: String(e) }); }
+});
+
 // health-check
 app.get('/api/health', (req, res) => res.json({ ok: true }));
 
@@ -183,6 +277,10 @@ const HOST = '0.0.0.0';   // обязательно для Railway — слуш�
 app.listen(PORT, HOST, () => {
   console.log('✓ Сервер запущен на ' + HOST + ':' + PORT);
   initSchema()
-    .then(() => console.log('✓ Схема БД готова'))
+    .then(() => {
+      console.log('✓ Схема БД готова');
+      maybeAutoClean();                        // проверка при старте
+      setInterval(maybeAutoClean, 30*60*1000); // и каждые 30 минут
+    })
     .catch(err => console.error('⚠ Ошибка инициализации БД (сервер работает, проверьте DATABASE_URL):', err));
 });
