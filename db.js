@@ -9,19 +9,27 @@ if (!connectionString) {
   console.warn('⚠  DATABASE_URL не задан. Добавьте PostgreSQL в проект Railway.');
 }
 
+// SSL: для ВНУТРЕННЕГО подключения Railway (*.railway.internal) SSL НЕ нужен
+// и может ломать соединение. Для внешних (proxy.rlwy.net и т.п.) — нужен.
+function needSSL(cs) {
+  if (!cs) return false;
+  if (cs.includes('.railway.internal')) return false;   // внутренняя сеть — без SSL
+  if (process.env.PGSSL === 'disable') return false;
+  if (process.env.PGSSL === 'require') return true;
+  // внешние хосты Railway (proxy.rlwy.net / containers-*.railway.app)
+  if (cs.includes('rlwy.net') || cs.includes('railway')) return true;
+  return false;
+}
+
 const pool = new Pool({
   connectionString,
-  // Railway требует SSL для внешних подключений; для внутренних не мешает.
-  ssl: connectionString && connectionString.includes('railway')
-    ? { rejectUnauthorized: false }
-    : (process.env.PGSSL === 'require' ? { rejectUnauthorized: false } : false),
+  ssl: needSSL(connectionString) ? { rejectUnauthorized: false } : false,
 });
 
 // Прогон schema.sql при старте (idempotent — безопасно запускать каждый раз)
 async function initSchema() {
   const sql = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf-8');
   await pool.query(sql);
-  console.log('✓ Схема БД готова');
 }
 
 module.exports = { pool, initSchema };

@@ -164,10 +164,13 @@ app.put('/api/settings/:key', async (req, res) => {
 app.get('/api/health', (req, res) => res.json({ ok: true }));
 
 const PORT = process.env.PORT || 3000;
-initSchema()
-  .then(() => app.listen(PORT, () => console.log('✓ Сервер запущен на порту ' + PORT)))
-  .catch(err => {
-    console.error('Ошибка инициализации БД:', err);
-    // всё равно поднимаем сервер, чтобы отдавать статику
-    app.listen(PORT, () => console.log('⚠ Сервер запущен без БД на порту ' + PORT));
-  });
+const HOST = '0.0.0.0';   // обязательно для Railway — слушать на всех интерфейсах
+
+// Сначала поднимаем сервер (чтобы Railway сразу получал ответ),
+// затем в фоне инициализируем схему БД.
+app.listen(PORT, HOST, () => {
+  console.log('✓ Сервер запущен на ' + HOST + ':' + PORT);
+  initSchema()
+    .then(() => console.log('✓ Схема БД готова'))
+    .catch(err => console.error('⚠ Ошибка инициализации БД (сервер работает, проверьте DATABASE_URL):', err));
+});
