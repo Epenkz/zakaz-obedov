@@ -86,13 +86,25 @@ app.delete('/api/dishes/:kind/:title', async (req, res) => {
   } catch (e) { console.error(e); res.status(500).json({ error: String(e) }); }
 });
 
+// Изменить цену блюда (NULL = цена по умолчанию)
+app.put('/api/dishes/:kind/:title', async (req, res) => {
+  const kind = req.params.kind === 'bake' ? 'bake' : 'main';
+  let price = (req.body && req.body.price);
+  price = (price === '' || price == null) ? null : Math.max(0, parseInt(price, 10) || 0);
+  try {
+    await pool.query(`UPDATE dishes SET price=$1 WHERE kind=$2 AND title=$3`,
+      [price, kind, req.params.title]);
+    res.json({ ok: true });
+  } catch (e) { console.error(e); res.status(500).json({ error: String(e) }); }
+});
+
 // ======================================================
 //  ЗАКАЗЫ  ->  [{name, items:[{title,cat,qty,price}], sum, paid, cid}]
 // ======================================================
 app.get('/api/orders', async (req, res) => {
   try {
     const { rows: ords } = await pool.query(
-      `SELECT id, customer, client_id, total, paid FROM orders ORDER BY id`);
+      `SELECT id, customer, client_id, total, paid, note FROM orders ORDER BY id`);
     const { rows: items } = await pool.query(
       `SELECT order_id, title, kind, qty, price FROM order_items`);
     const byOrder = {};
@@ -101,7 +113,7 @@ app.get('/api/orders', async (req, res) => {
         { title: it.title, cat: it.kind, qty: it.qty, price: it.price });
     });
     res.json(ords.map(o => ({
-      name: o.customer, cid: o.client_id, sum: o.total, paid: o.paid,
+      name: o.customer, cid: o.client_id, sum: o.total, paid: o.paid, note: o.note || '',
       items: byOrder[o.id] || []
     })));
   } catch (e) { console.error(e); res.status(500).json({ error: String(e) }); }
@@ -117,8 +129,8 @@ app.post('/api/orders', async (req, res) => {
     await client.query('BEGIN');
     const sum = items.reduce((s, it) => s + (it.qty * it.price), 0);
     const { rows } = await client.query(
-      `INSERT INTO orders(customer, client_id, total, paid) VALUES ($1,$2,$3,$4) RETURNING id`,
-      [String(o.name).trim(), o.cid || null, sum, o.paid !== false]);
+      `INSERT INTO orders(customer, client_id, total, paid, note) VALUES ($1,$2,$3,$4,$5) RETURNING id`,
+      [String(o.name).trim(), o.cid || null, sum, o.paid !== false, (o.note || '').toString().slice(0, 300)]);
     const oid = rows[0].id;
     for (const it of items) {
       await client.query(

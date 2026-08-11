@@ -45,6 +45,11 @@ CREATE TABLE IF NOT EXISTS settings (
 CREATE INDEX IF NOT EXISTS idx_order_items_order ON order_items(order_id);
 CREATE INDEX IF NOT EXISTS idx_orders_created    ON orders(created_at);
 
+-- Комментарий к заказу (без лука, поострее и т.п.) — добавляется безопасно
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS note TEXT;
+
 -- Значение по умолчанию для приёма заказов после 11:30
 INSERT INTO settings(key, value) VALUES ('forceOpen', 'false')
+  ON CONFLICT (key) DO NOTHING;
+INSERT INTO settings(key, value) VALUES ('bakeClose', '630')
   ON CONFLICT (key) DO NOTHING;

@@ -149,6 +149,29 @@
   .additem input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgba(255,107,44,.15)}
   .addbtn{width:100%;padding:12px;border:none;border-radius:12px;background:var(--accent);color:#fff;font-family:'Baloo 2',cursive;font-size:15px;font-weight:800;cursor:pointer;box-shadow:0 4px 12px rgba(255,107,44,.28)}
   .addbtn:active{transform:scale(.98)}
+  /* Управление блюдами в админке */
+  .chkrow{display:flex;align-items:center;justify-content:space-between;gap:8px}
+  .chk-main{display:flex;align-items:center;gap:10px;flex:1;cursor:pointer;margin:0}
+  .chk-ctr{display:flex;gap:6px;flex:none}
+  .mini{width:34px;height:34px;border:2px solid var(--line);background:#fffaf5;border-radius:10px;font-size:15px;cursor:pointer;color:var(--muted);line-height:1;padding:0}
+  .mini:active{transform:scale(.92)}
+  .del-mini{color:var(--danger);border-color:#fecaca}
+  .popbadge{background:#fff0e4;color:var(--accent);font-size:12px;font-weight:800;padding:2px 8px;border-radius:20px;margin-left:auto}
+  /* Статистика */
+  .stats{background:linear-gradient(180deg,#f0fbff,#e6f6ff);border:2px solid #bae6fd}
+  .stats h2{color:#0369a1}
+  .stat-row{display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px dashed #bae6fd;font-size:15px;font-weight:600}
+  .stat-row:last-child{border-bottom:none}
+  .stat-v{font-weight:800;color:#0369a1}
+  .stat-total{font-size:17px}
+  .stat-total .stat-v{color:var(--accent)}
+  .btn-download{background:linear-gradient(135deg,#0ea5e9,#0369a1);box-shadow:0 6px 16px rgba(3,105,161,.28)}
+  /* Кто ещё не заказал */
+  .notordered{background:linear-gradient(180deg,#fffbeb,#fef3c7);border:2px solid #fde68a}
+  .notordered h2{color:#92400e}
+  .no-row{padding:8px 0;border-bottom:1px dashed #fde68a;font-size:15px;font-weight:600}
+  .no-row:last-child{border-bottom:none}
+  .allok{color:#166534;font-weight:700;text-align:center;padding:8px 0}
 </style>
 </head>
 <body>
@@ -184,6 +207,10 @@
       <div id="bakes"></div>
     </div>
     <div class="card">
+      <label for="note">Комментарий к заказу <span style="color:var(--muted);font-weight:400">(необязательно)</span></label>
+      <input id="note" type="text" placeholder="Напр.: без лука, поострее" maxlength="300" autocomplete="off">
+    </div>
+    <div class="card">
       <div class="total"><span>Итого к оплате:</span><span id="total">0 ₸</span></div>
     </div>
     <div class="card qr">
@@ -209,6 +236,9 @@
       <div class="status" id="status"></div>
       <label style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;font-weight:600;font-size:15px;cursor:pointer"><span>Держать приём заказов открытым</span><input type="checkbox" id="forceOpen" style="width:22px;height:22px"></label>
       <div class="hint" style="margin-top:4px">Если включено — заказы принимаются, даже после 11:30.</div>
+      <label style="display:flex;justify-content:space-between;align-items:center;margin-top:14px;font-weight:600;font-size:15px"><span>🥐 Приём выпечки до</span><input type="time" id="bakeCloseInput" style="width:auto;padding:8px 10px;border:2px solid var(--line);border-radius:10px;font-size:15px"></label>
+      <div class="hint" style="margin-top:4px">Выпечку можно заказывать до этого времени (обычно раньше основного меню).</div>
+      <button class="btn2" id="saveBakeClose" style="margin-top:8px">Сохранить время выпечки</button>
     </div>
     <div class="card">
       <label>Меню на сегодня</label>
@@ -234,6 +264,16 @@
       <div class="hint" style="margin:0 0 10px;color:#92400e">Отправьте повару до 11:30.</div>
       <div id="cook"><div class="empty">Пока заказов нет</div></div>
       <button class="btn2 btn-copy" id="copyCook">📋 Скопировать для повара</button>
+      <button class="btn2 btn-download" id="downloadCook">⬇️ Скачать список (файл)</button>
+    </div>
+    <div class="card notordered">
+      <h2>🕒 Ещё не заказали</h2>
+      <div class="hint" style="margin:0 0 10px">Из тех, кто заказывал раньше (по именам с этого устройства).</div>
+      <div id="notOrderedBox"><div class="empty">—</div></div>
+    </div>
+    <div class="card stats">
+      <h2>📊 Статистика за день</h2>
+      <div id="statsBox"><div class="empty">Пока заказов нет</div></div>
     </div>
     <div class="card orders">
       <h2>Все заказы</h2>
@@ -265,6 +305,7 @@ var nameEl,paidEl,totalEl;
 var SERVER_OK=null, SERVER_ERR='';
 // Кэш справочников блюд (обновляется в refresh) — чтобы priceOf/itemLabel были синхронными
 var DISH_CACHE={main:[],bake:[]};   // [{title,price,is_active}]
+var POP_CACHE={};   // {название: сколько_заказано_сегодня}
 function api(method,url,body){
   var opt={method:method,headers:{'Content-Type':'application/json'}};
   if(body!=null) opt.body=JSON.stringify(body);
@@ -286,6 +327,8 @@ function saveMenuActive(mains,bakes){ return api('PUT','/api/menu',{mains:mains,
 // Справочник блюд
 function getDishes(kind){ return api('GET','/api/dishes/'+kind).then(function(v){return Array.isArray(v)?v:[];}); }
 function addDishServer(kind,title,price){ return api('POST','/api/dishes/'+kind,{title:title,price:price}); }
+function deleteDishServer(kind,title){ return api('DELETE','/api/dishes/'+kind+'/'+encodeURIComponent(title)); }
+function editDishPriceServer(kind,title,price){ return api('PUT','/api/dishes/'+kind+'/'+encodeURIComponent(title),{price:price}); }
 // Настройки
 function getSetting(key){ return api('GET','/api/settings/'+key).then(function(v){return v?v.value:null;}); }
 function putSetting(key,value){ return api('PUT','/api/settings/'+key,{value:value}); }
@@ -300,6 +343,12 @@ function priceOf(title,cat){ var p=dishPrice(title,cat); return p!=null?p:(cat==
 function itemLabel(title){ var p=dishPrice(title,'main'); if(p==null)p=dishPrice(title,'bake'); return p!=null?title+' — '+p+' ₸':title; }
 function todayStr(){var d=new Date();return d.getFullYear()+'-'+(d.getMonth()+1)+'-'+d.getDate();}
 var FORCE_OPEN=false;
+var BAKE_CLOSE=630;   // минуты от полуночи, время закрытия выпечки (по умолч. 10:30), задаётся в админке
+function bakeClosed(){ if(FORCE_OPEN) return false; var d=new Date(); return d.getHours()*60+d.getMinutes()>=BAKE_CLOSE; }
+function bakeCloseLabel(){ var h=Math.floor(BAKE_CLOSE/60), m=BAKE_CLOSE%60; return (h<10?'0':'')+h+':'+(m<10?'0':'')+m; }
+function minToTime(min){ var h=Math.floor(min/60), m=min%60; return (h<10?'0':'')+h+':'+(m<10?'0':'')+m; }
+function timeToMin(str){ var p=(str||'').split(':'); var h=parseInt(p[0],10)||0, m=parseInt(p[1],10)||0; return h*60+m; }
+function bakeDeadline(){ var d=new Date(); d.setHours(Math.floor(BAKE_CLOSE/60), BAKE_CLOSE%60, 0, 0); return d.getTime(); }
 function ordersClosed(){ if(FORCE_OPEN) return false; var d=new Date();return d.getHours()*60+d.getMinutes()>=closeMin();}
 
 
@@ -350,7 +399,7 @@ function updCd(id,deadline,label,contId){
 function ticks(){
   if(FORCE_OPEN){ setOpenCd('cdMain','основного меню',null); setOpenCd('cdBake','выпечки','bakes'); return; }
   updCd('cdMain', todayAt(11,30), 'основного меню', null);
-  updCd('cdBake', todayAt(11,30), 'выпечки', 'bakes');
+  updCd('cdBake', bakeDeadline(), 'выпечки (до '+bakeCloseLabel()+')', 'bakes');
 }
 function setOpenCd(id,label,contId){ var el=$(id); if(el){ el.className='countdown'; el.textContent='✅ Приём '+label+' открыт'; } if(contId&&$(contId)) $(contId).style.display=''; }
 function buildMenuList(mn){
@@ -364,7 +413,7 @@ function collectItems(){
   var items=[];
   document.querySelectorAll('#orderView .item').forEach(function(r){
     var q=+r.querySelector('.qty').textContent;
-    if(q>0){var cat=r.dataset.cat; if(cat==='bake'&&!FORCE_OPEN&&Date.now()>=todayAt(11,30))return; items.push({title:r.dataset.title,cat:cat,qty:q,price:priceOf(r.dataset.title,cat)});}
+    if(q>0){var cat=r.dataset.cat; if(cat==='bake'&&!FORCE_OPEN&&Date.now()>=bakeDeadline())return; items.push({title:r.dataset.title,cat:cat,qty:q,price:priceOf(r.dataset.title,cat)});}
   });
   return items;
 }
@@ -420,13 +469,58 @@ function renderCook(orders){
   var html='';
   if(Object.keys(mains).length){html+='<div class="cook-sub">ОСНОВНЫЕ БЛЮДА</div>'+mk(mains);}
   if(Object.keys(bakes).length){html+='<div class="cook-sub">ВЫПЕЧКА</div>'+mk(bakes);}
+  var notes=orders.filter(function(o){return o.note&&o.note.trim();});
+  if(notes.length){ html+='<div class="cook-sub">📝 ПОЖЕЛАНИЯ</div>'; notes.forEach(function(o){ html+='<div class="cook-row"><span>'+o.name+'</span><span class="q" style="font-weight:600">'+o.note.trim()+'</span></div>'; }); }
+  box.innerHTML=html;
+}
+function renderNotOrdered(orders){
+  var box=$('notOrderedBox');
+  var known=loadNames();
+  var ordered={};
+  orders.forEach(function(o){ if(o.name) ordered[o.name.trim().toLowerCase()]=true; });
+  var missing=known.filter(function(n){ return !ordered[n.trim().toLowerCase()]; });
+  if(!known.length){ box.innerHTML='<div class="empty">Список имён пуст</div>'; return; }
+  if(!missing.length){ box.innerHTML='<div class="allok">✅ Все, кто заказывал раньше, уже заказали!</div>'; return; }
+  box.innerHTML=missing.map(function(n){return '<div class="no-row">👤 '+n+'</div>';}).join('');
+}
+function renderStats(orders){
+  var box=$('statsBox');
+  if(!orders.length){ box.innerHTML='<div class="empty">Пока заказов нет</div>'; return; }
+  var totalSum=0, totalItems=0, mainCount=0, bakeCount=0;
+  var perDish={};
+  orders.forEach(function(o){
+    totalSum+=o.sum||0;
+    (o.items||[]).forEach(function(it){
+      totalItems+=it.qty;
+      if(it.cat==='bake') bakeCount+=it.qty; else mainCount+=it.qty;
+      perDish[it.title]=(perDish[it.title]||0)+it.qty;
+    });
+  });
+  // топ-3 популярных
+  var top=Object.keys(perDish).map(function(k){return [k,perDish[k]];}).sort(function(a,b){return b[1]-a[1];}).slice(0,3);
+  var html='';
+  html+='<div class="stat-row"><span>👥 Всего заказов</span><span class="stat-v">'+orders.length+'</span></div>';
+  html+='<div class="stat-row"><span>🍽 Порций всего</span><span class="stat-v">'+totalItems+'</span></div>';
+  html+='<div class="stat-row"><span>🍲 Основные / 🥐 Выпечка</span><span class="stat-v">'+mainCount+' / '+bakeCount+'</span></div>';
+  html+='<div class="stat-row stat-total"><span>💰 Сумма к оплате</span><span class="stat-v">'+totalSum.toLocaleString('ru-RU')+' ₸</span></div>';
+  if(top.length){ html+='<div class="cook-sub" style="margin-top:12px">🔥 Популярное сегодня</div>';
+    top.forEach(function(t){ html+='<div class="stat-row"><span>'+t[0]+'</span><span class="stat-v">'+t[1]+' шт</span></div>'; }); }
   box.innerHTML=html;
 }
 function cookText(orders){
-  var a=agg(orders);var mains=a.mains,bakes=a.bakes;var L=['Заказ обедов на сегодня:'];
+  var a=agg(orders);var mains=a.mains,bakes=a.bakes;var L=['🍱 Заказ обедов на сегодня:'];
   if(Object.keys(mains).length){L.push('','Основные блюда:');Object.keys(mains).forEach(function(k){L.push('- '+k+' — '+mains[k]+' шт');});}
   if(Object.keys(bakes).length){L.push('','Выпечка:');Object.keys(bakes).forEach(function(k){L.push('- '+k+' — '+bakes[k]+' шт');});}
   if(!Object.keys(mains).length&&!Object.keys(bakes).length){L.push('','Заказов пока нет.');}
+  // комментарии к заказам
+  var notes=orders.filter(function(o){return o.note&&o.note.trim();});
+  if(notes.length){ L.push('','📝 Пожелания:'); notes.forEach(function(o){ L.push('- '+o.name+': '+o.note.trim()); }); }
+  // итог
+  if(orders.length){
+    var totalSum=0,totalItems=0;
+    orders.forEach(function(o){ totalSum+=o.sum||0; (o.items||[]).forEach(function(it){totalItems+=it.qty;}); });
+    L.push('','———','Итого: '+orders.length+' чел., '+totalItems+' порц., '+totalSum.toLocaleString('ru-RU')+' ₸');
+  }
   return L.join('\n');
 }
 function copyText(t){
@@ -434,19 +528,57 @@ function copyText(t){
   else{fallbackCopy(t);}
 }
 function fallbackCopy(t){var ta=document.createElement('textarea');ta.value=t;document.body.appendChild(ta);ta.select();try{document.execCommand('copy');alert('Скопировано! Можно вставить повару.');}catch(e){alert(t);}document.body.removeChild(ta);}
-function chkRows(container,list,selected){
+function chkRows(container,list,selected,kind){
   container.innerHTML='';
-  list.forEach(function(t){var row=document.createElement('label');row.className='chkrow';var cb=document.createElement('input');cb.type='checkbox';cb.value=t;cb.checked=selected.indexOf(t)>=0;var sp=document.createElement('span');sp.textContent=itemLabel(t);row.appendChild(cb);row.appendChild(sp);container.appendChild(row);});
+  list.forEach(function(t){
+    var row=document.createElement('div');row.className='chkrow';
+    var lab=document.createElement('label');lab.className='chk-main';
+    var cb=document.createElement('input');cb.type='checkbox';cb.value=t;cb.checked=selected.indexOf(t)>=0;
+    var sp=document.createElement('span');sp.textContent=itemLabel(t);
+    lab.appendChild(cb);lab.appendChild(sp);
+    // счётчик популярности (заказано сегодня)
+    var cnt=POP_CACHE[t]||0;
+    if(cnt>0){var pb=document.createElement('span');pb.className='popbadge';pb.textContent='🔥 '+cnt;lab.appendChild(pb);}
+    row.appendChild(lab);
+    // кнопки управления
+    var ctr=document.createElement('span');ctr.className='chk-ctr';
+    var ed=document.createElement('button');ed.type='button';ed.className='mini';ed.textContent='✎';ed.title='Изменить цену';
+    ed.onclick=function(e){e.preventDefault();editDishPrice(kind,t);};
+    var dl=document.createElement('button');dl.type='button';dl.className='mini del-mini';dl.textContent='✕';dl.title='Удалить блюдо';
+    dl.onclick=function(e){e.preventDefault();removeDish(kind,t);};
+    ctr.appendChild(ed);ctr.appendChild(dl);
+    row.appendChild(ctr);
+    container.appendChild(row);
+  });
 }
-function renderMenuEditor(mn){ chkRows($('editMains'),(DISH_CACHE.main||[]).map(function(d){return d.title;}),mn.mains); chkRows($('editBakes'),(DISH_CACHE.bake||[]).map(function(d){return d.title;}),mn.bakes); }
+function editDishPrice(kind,title){
+  var cur=null;(DISH_CACHE[kind]||[]).forEach(function(d){if(d.title===title)cur=d.price;});
+  var def=kind==='main'?1000:700;
+  var p=prompt('Цена для «'+title+'» в ₸\n(пусто = цена по умолчанию '+def+' ₸):', cur!=null?cur:'');
+  if(p===null)return;
+  var price=(''+p).trim()===''?null:Math.max(0,parseInt(p,10)||0);
+  editDishPriceServer(kind,title,price).then(function(){
+    lastMenuSig=null;
+    getDishes(kind).then(function(list){DISH_CACHE[kind]=list||[];return getMenuRaw();}).then(function(m){renderMenuEditor(normalizeMenu(m));});
+  });
+}
+function removeDish(kind,title){
+  if(!confirm('Удалить блюдо «'+title+'» из справочника?'))return;
+  deleteDishServer(kind,title).then(function(){
+    lastMenuSig=null;
+    getDishes(kind).then(function(list){DISH_CACHE[kind]=list||[];return getMenuRaw();}).then(function(m){renderMenuEditor(normalizeMenu(m));});
+  });
+}
+function renderMenuEditor(mn){ chkRows($('editMains'),(DISH_CACHE.main||[]).map(function(d){return d.title;}),mn.mains,'main'); chkRows($('editBakes'),(DISH_CACHE.bake||[]).map(function(d){return d.title;}),mn.bakes,'bake'); }
 
 function isAdmin(){return localStorage.getItem('admin')==='1';}
 var lastMenuSig=null;
 function refresh(){
-  return Promise.all([getMenuRaw(),getOrders(),getSetting('forceOpen'),getDishes('main'),getDishes('bake')]).then(function(res){
+  return Promise.all([getMenuRaw(),getOrders(),getSetting('forceOpen'),getDishes('main'),getDishes('bake'),getSetting('bakeClose')]).then(function(res){
     var menu=normalizeMenu(res[0]);var orders=res[1];
     FORCE_OPEN=(res[2]===true);
     DISH_CACHE.main=res[3]||[]; DISH_CACHE.bake=res[4]||[];
+    if(res[5]!=null && !isNaN(+res[5])) BAKE_CLOSE=+res[5];
     var on=isAdmin(), closed=ordersClosed();
     var off=$('offline');
     if(SERVER_OK===false){ off.textContent='⚠ Ошибка сервера: '+SERVER_ERR; off.style.display='block'; }
@@ -462,11 +594,14 @@ function refresh(){
     if(sig!==lastMenuSig){ lastMenuSig=sig; buildOrderForm(menu); buildMenuList(menu); if(on) renderMenuEditor(menu); }
     if(on){
       $('forceOpen').checked=FORCE_OPEN;
+      $('bakeCloseInput').value=minToTime(BAKE_CLOSE);
       var st=$('status');
       if(FORCE_OPEN){st.className='status open';st.textContent='Приём заказов открыт (включён администратором)';}
       else if(closed){st.className='status shut';st.textContent='Приём заказов ЗАКРЫТ (после '+closeLabel()+')';}
       else{st.className='status open';st.textContent='Приём заказов открыт (до '+closeLabel()+')';}
       renderOrders(orders);
+      renderStats(orders);
+      renderNotOrdered(orders);
     } else { renderMyOrders(orders); }
   }).catch(function(e){ console.warn('refresh: сеть недоступна (предпросмотр без интернета?)', e); });
 }
@@ -479,6 +614,7 @@ $('adminBtn').onclick=function(){
 };
 $('logout').onclick=function(){localStorage.removeItem('admin');lastMenuSig=null;refresh();window.scrollTo({top:0,behavior:'smooth'});};
 $('forceOpen').onchange=function(){ putSetting('forceOpen',$('forceOpen').checked).then(function(){ FORCE_OPEN=$('forceOpen').checked; lastMenuSig=null; refresh(); }); };
+$('saveBakeClose').onclick=function(){ var v=$('bakeCloseInput').value; if(!v){alert('Укажите время');return;} var min=timeToMin(v); putSetting('bakeClose',min).then(function(){ BAKE_CLOSE=min; lastMenuSig=null; return refresh(); }).then(function(){ alert('Время приёма выпечки: до '+minToTime(min)); }); };
 function addDish(kind,nameId,priceId){
   var name=($(nameId).value||'').trim();
   if(!name){ alert('Введите название блюда'); $(nameId).focus(); return; }
@@ -502,6 +638,12 @@ $('saveMenu').onclick=function(){
   saveMenuActive(mains,bakes).then(function(){lastMenuSig=null;return refresh();}).then(function(){alert('Меню на сегодня сохранено. Его увидят все.');});
 };
 $('copyCook').onclick=function(){getOrders().then(function(o){copyText(cookText(o));});};
+$('downloadCook').onclick=function(){getOrders().then(function(o){
+  var text=cookText(o);
+  var d=new Date();var fname='zakaz_obedov_'+d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2)+'-'+('0'+d.getDate()).slice(-2)+'.txt';
+  var blob=new Blob([text],{type:'text/plain;charset=utf-8'});
+  var a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=fname;document.body.appendChild(a);a.click();document.body.removeChild(a);
+});};
 $('done').onclick=function(){
   if(ordersClosed()){alert('Приём заказов на сегодня закрыт (после '+closeLabel()+').');refresh();return;}
   var name=nameEl.value.trim();
@@ -509,11 +651,12 @@ $('done').onclick=function(){
   var items=collectItems();
   if(!items.length){alert('Выберите хотя бы одно блюдо');return;}
   if(isMobile()){ window.open(KASPI_URL,'_blank'); }
-  var order={name:name,items:items,sum:calcTotal(),paid:true,cid:myId()};
+  var order={name:name,items:items,sum:calcTotal(),paid:true,cid:myId(),note:($('note').value||'').trim()};
   addOrder(order).then(function(r){
     if(r===null){ alert('Не удалось сохранить заказ на сервере. Попробуйте ещё раз.'); return; }
     var names=loadNames();if(names.indexOf(name)<0){names.push(name);saveNames(names);renderNames();}
     resetItems();
+    $('note').value='';
     alert('Ваш заказ принят!');
     window.scrollTo({top:0,behavior:'smooth'});
     refresh();
